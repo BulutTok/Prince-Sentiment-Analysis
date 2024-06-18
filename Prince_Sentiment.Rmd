@@ -1,0 +1,341 @@
+---
+title: - "Sentiment Analysis"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Sentiment Analysis of Prince Lyrics
+
+## Load the required libraries
+```{r,include=FALSE}
+#install.packages("textdata")
+library(tidyverse) 
+library(tidytext) 
+library(textdata)
+library(gridExtra) #viewing multiple plots together 
+```
+
+## Read in the data 
+
+read-in the following data set in R: prince_text.csv (the data set is available on Canvas).The Data is the result of scraping Billboard Chart information and Prince lyrics from various sites.
+```{r, include=FALSE}
+ prince <-read_csv("prince_raw_data.csv")
+```
+
+## Modify the dataset
+```{r, include=FALSE}
+#change the name of the column "text" to "lyrics".
+ prince <-prince %>% 
+  select (lyrics = text, song, year, album, peak, US.Pop, US.R.B)
+
+#Create a column name decade. Then store the results back into prince.
+prince <- prince %>%
+  mutate(decade = 
+           ifelse(prince$year %in% 1978:1979, "1970s", 
+           ifelse(prince$year %in% 1980:1989, "1980s", 
+           ifelse(prince$year %in% 1990:1999, "1990s", 
+           ifelse(prince$year %in% 2000:2009, "2000s", 
+           ifelse(prince$year %in% 2010:2015, "2010s", 
+                  "NA"))))))
+
+#Also, create a column name chart_level.
+prince <- prince %>%
+  mutate(chart_level = 
+           ifelse(prince$peak %in% 1:10, "Top 10", 
+           ifelse(prince$peak %in% 11:100, "Top 100", "Uncharted")))
+```
+
+
+```{r}
+#prince
+```
+
+
+
+
+
+
+
+```{r, include=FALSE}
+# Remove contractions by creating a function that 
+# handles most scenarios using gsub(), and then apply 
+# that function across all lyrics. 
+
+fix.contractions <- function(doc) {
+  # "won't" is a special case as it does not expand to "wo not"
+  doc <- gsub("won't", "will not", doc)
+  doc <- gsub("can't", "can not", doc)
+  doc <- gsub("n't", " not", doc)
+  doc <- gsub("'ll", " will", doc)
+  doc <- gsub("'re", " are", doc)
+  doc <- gsub("'ve", " have", doc)
+  doc <- gsub("'m", " am", doc)
+  doc <- gsub("'d", " would", doc)
+  # 's could be 'is' or could be possessive: it has no expansion
+  doc <- gsub("'s", "", doc)
+  return(doc)
+}
+
+# fix (expand) contractions
+prince$lyrics <- sapply(prince$lyrics, fix.contractions)
+```
+ 
+## Tokenize and preprocess text
+```{r, include=FALSE}
+#Below is a list of undesirable words in this data set:
+undesirable_words <- c("prince", "chorus", "repeat", "lyrics","theres", "bridge", "fe0f", "yeah", "baby", 
+"alright", "wanna", "gonna", "chorus", "verse", 
+"whoa", "gotta", "make", "miscellaneous", "2", 
+"4", "ooh", "uurh", "pheromone", "poompoom", "3121", 
+"matic", " ai ", " ca ", " la ", "hey", " na ", 
+ " da ", " uh ", " tin ", "  ll", "transcription", "repeats")
+
+tidy_prince <-prince %>%
+  unnest_tokens("word",lyrics)%>%
+  anti_join(stop_words)%>%
+  filter (!word %in% undesirable_words) %>%
+  filter(nchar(word) > 2)
+
+tidy_prince$word <- gsub("\\s+","", tidy_prince$word)
+tidy_prince$word <- gsub("[^a-zA-Z]","", tidy_prince$word)
+```
+
+
+
+
+
+```{r}
+#tidy_prince
+```
+
+## 1. Calculate the Match Ratio between the tidy text data frame and the three lexicons bing, NRC, and Afinn. Which lexicon has more of the distinct words from the lyrics? **(10 points)** 
+
+```{r}
+bing<-get_sentiments("bing")
+nrc<-get_sentiments("nrc")
+afinn<-get_sentiments("afinn")
+
+#convert the values in the afinn lexicon to positive and negative sentiments
+afinn_neg_pos <- afinn %>%
+  mutate( sentiment = ifelse( value >= 0, "positive",
+                              ifelse( value < 0,
+                                     "negative", value)))
+afinn_neg_pos <-afinn_neg_pos %>%
+  select(word, sentiment)
+
+
+#Combine the three lexicons
+sentiments <-bind_rows(list(bing=bing,nrc=nrc,afinn=afinn_neg_pos),.id = "lexicon")
+
+
+new_sentiments <- sentiments %>%
+  group_by(lexicon) %>%
+  mutate(words_in_lexicon = n_distinct(word)) %>%
+  ungroup()
+
+
+tidy_prince %>%
+  mutate(words_in_reviews = n_distinct(word)) %>%
+  inner_join(new_sentiments) %>%
+  group_by(song,lexicon,words_in_reviews, words_in_lexicon) %>%
+  summarise(lex_match_words = n_distinct(word)) %>%
+  ungroup() %>%
+  mutate(total_match_words = sum(lex_match_words), #Not used but good to have
+         match_ratio = lex_match_words / words_in_reviews) %>%
+  select(lexicon, song,lex_match_words, words_in_reviews, match_ratio) 
+```
+
+
+## 2. Sentiment analysis
+
+Implement sentiment analysis using the inner join function and the "nrc" lexicon by performing an inner_join() on the get_sentiments() function.
+
+
+
+
+```{r}
+prince_nrc <- tidy_prince %>%
+  mutate(words_in_reviews = n_distinct(word)) %>%
+  inner_join(get_sentiments("nrc")) %>%
+  group_by(song, word, sentiment) %>%
+  summarise(n = n()) %>%
+  arrange(desc(n))
+head(prince_nrc)
+```
+
+## 3. Which words contribute to the sentiment scores? 
+It's important to understand which words specifically are driving sentiment scores, and since we are using tidy data principles, it's not too difficult to check.
+
+Count by word and sentiment to find which words are contributing most overall to the sentiment scores. Group by sentiment. Take the top 10 words for each sentiment
+using top_n(). Set up the plot using aes(), with the words on the x-axis, the number of uses n on the y-axis, and fill corresponding to sentiment. Explain the results.
+```{r fig.height = 7, fig.width = 7, fig.align = "center"}
+prince_nrc %>%
+ # Count by word and sentiment
+ count(word,sentiment,sort = TRUE)%>%
+ # Group by sentiment
+ group_by(sentiment)%>%
+ # Take the top 10 words for each sentiment
+ top_n(10)%>%
+ ungroup() %>%
+ mutate(word = reorder(word, n)) %>%
+ # Set up the plot with aes() using the ggplot() and geom_col(). set the graph aes so x is word and y is n and the columns are filled with sentiment. 
+ ggplot(aes(word,n, fill=sentiment)) +
+ geom_col(show.legend = FALSE) +
+ facet_wrap(~ sentiment, ncol =5, scales = "free")+
+ coord_flip()
+```
+
+
+
+
+## 4. Which song uses the most positive words? 
+
+Make a new column called song_total in the dataframe that tallies the total number of words from each song; the mutate() verb will make a new column and the function n() counts the number of observations in the current group:mutate(song_total=n()). 
+
+Define a new column percent using mutate() that is n divided by song_total, the proportion of words that belong to that sentiment. Filter only for the positive sentiment rows. Arrange by percent so you can see the results sorted by proportion of positive words.Explain the results.
+
+```{r}
+prince_sentiment_song <- prince_nrc %>%
+  # Group by song
+  group_by(song) %>%
+  # Define a new column song_total
+  mutate(song_total = n()) %>%
+  # Ungroup
+  ungroup()
+
+prince_sentiment_song %>%
+  count(song, sentiment, song_total) %>%
+  # Define a new column percent that is n divided by song_total
+  mutate(percent = n / song_total) %>%
+  # Filter only for positive words
+  filter(sentiment == "positive") %>%
+  # Arrange by percent
+  arrange(desc(percent))
+
+head(prince_sentiment_song)
+```
+
+## 5.Sign O' the Times 
+
+In 1987, Prince wrote a song called "Sign O' the Times". What is the mood of this song using the "nrc" lexicon? Visualize and explain the results. Try this for the song "so blue". what is the mood of that song?
+
+```{r}
+
+
+prince_nrc %>%
+  filter(song %in% "sign o the times") %>%
+  group_by(sentiment) %>%
+  summarise(word_count = n()) %>%
+  ungroup() %>%
+  mutate(sentiment = reorder(sentiment, word_count)) %>%
+  ggplot(aes(x = sentiment, y = word_count, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  guides(fill = FALSE) +
+  labs(x = "Sentiment", y = "Word Count") +
+  ggtitle("Sign O' The Times NRC Sentiment") +
+  coord_flip()
+
+```
+
+```{r}
+
+
+prince_nrc %>%
+  filter(song %in% "so blues") %>%
+  group_by(sentiment) %>%
+  summarise(word_count = n()) %>%
+  ungroup() %>%
+  mutate(sentiment = reorder(sentiment, word_count)) %>%
+  ggplot(aes(x = sentiment, y = word_count, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  guides(fill = FALSE) +
+  labs(x = "Sentiment", y = "Word Count") +
+  ggtitle("so blue The Times NRC Sentiment") +
+  coord_flip()
+
+```
+
+
+## 6. Polarity by chart level 
+
+Break down your analysis to the chart level using the Bing lexicon. Create a graph of the polar sentiment per chart level. Use spread() to separate the sentiments into columns and mutate() to create a polarity (positive - negative) field and a percent_positive field (positive/totalsentiment∗100), for a different perspective.
+
+
+```{r}
+prince_bing <- tidy_prince %>%
+  inner_join(get_sentiments("bing")) %>%
+  mutate(chart_level =
+           ifelse(peak %in% 1:10, "Top 10",
+                  ifelse(peak %in% 11:100, "Top 100", "Uncharted")))
+
+prince_polarity_chart <- prince_bing %>%
+  count(chart_level, sentiment) %>%
+  spread(sentiment, n, fill = 0) %>%
+  mutate(polarity = positive - negative) %>%
+  mutate(percent_positive = positive / (positive + negative) * 100)
+
+prince_polarity_chart
+```
+Visualize the results.
+```{r}
+  
+ggplot(prince_polarity_chart, aes(x = chart_level, y = polarity, fill = chart_level)) +
+  geom_col() +
+  xlab(NULL) + 
+  ylab(NULL) +
+  ggtitle("Polarity By Chart Level")
+
+```
+
+Does this say that charted songs are typically more positive than negative? If so, what does this tell you about what society wants to hear? Can you even make these assumptions? Note that the Bing lexicon itself has more negative than positive words.
+
+## 7. Polarity by decades 
+
+Break down your analysis to the decades using the Bing lexicon. Create a graph of the polar sentiment per decade. Use spread() to separate the sentiments into columns and mutate() to create a polarity (positive - negative) field and a percent_positive field (positive/totalsentiment∗100), for a different perspective.
+
+
+```{r}
+
+prince_polarity_decade <- prince_bing %>%
+ #Count sentiment by decade
+ count(decade, sentiment) %>%
+ filter(!decade == "NA")%>%
+  
+#Use spread() to separate the sentiments into columns
+  spread(sentiment, n, fill = 0) %>%
+#Use mutate() to create a polarity (positive - negative) field and a percent_positive field (positive/totalsentiment∗100)
+ mutate(polarity = positive - negative) %>%
+ mutate(percent_positive = positive / (positive + negative) * 100)
+
+prince_polarity_decade
+```
+
+
+Visualize  and explain the results.
+```{r}
+# Visualize the results using ggplot() and geom_col(). set the graph aes so x is decade and y is polarity and the columns are filled with decade
+
+ggplot(prince_polarity_decade, aes(x = decade, y = polarity, fill = decade)) +
+  geom_col() +
+  xlab(NULL) + 
+  ylab(NULL) +
+  ggtitle("Polarity By Chart Level")
+```
+
+#A list of Prince's life events is attached, collected from popular sources such as Rolling Stone Magazine, Biography.com, etc. 
+#Compare Prince's life events with the sentiment.
+
+The sentiment analysis of Prince's lyrics shows how his life events seemed to affect the mood of his music. In the 1970s, when he signed a big contract with Warner Brothers, his songs had a lot of positive vibes, reflecting his excitement and hope. Despite some limits imposed by Warner Brothers in the 1980s, his music remained mostly positive, showing his creative success. However, things took a negative turn in the 1990s during a public feud with Warner Brothers and his name change. This period was marked by more negative sentiments in his songs, indicating a tough time. The 2000s, including his divorce and return to the name Prince, showed a mix of emotions. Finally, the 2010s saw a more positive sentiment, suggesting a comeback or positive changes in his life. This analysis suggests that Prince's personal life may have strongly influenced the emotions conveyed in his music.
+
+## 8. Reflect on this assignment 
+
+a. What have you learned from this assignment through sentiment analysis?
+Through this assignment, I've learned how to apply sentiment analysis techniques to analyze the emotional content of text data, specifically in the context of analyzing Prince's lyrics. I've learned how to preprocess text, calculate sentiment scores using different lexicons, and visualize the results to gain insights into the overall sentiment of the lyrics
+
+b. What else do you want to know about the dataset?
+I would like to explore the dataset further to understand the distribution of sentiments across different albums, the evolution of sentiment in Prince's lyrics over time, and any patterns or trends that may exist in the emotional content of his songs. Additionally, I'm interested in comparing the sentiment of Prince's lyrics with other artists or genres to see how it differs or aligns with broader music trends.
+
+
